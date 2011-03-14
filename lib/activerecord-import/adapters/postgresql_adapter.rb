@@ -9,5 +9,9 @@ module ActiveRecord::Import::PostgreSQLAdapter
     def next_value_for_sequence(sequence_name)
       %{nextval('#{sequence_name}')}
     end
+
+    def new_keys(primary_key)
+      primary_key ? %{ RETURNING "#{primary_key}"} : ''
+    end
   end
 end

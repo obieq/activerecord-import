@@ -35,12 +35,17 @@ module ActiveRecord::Import::AbstractAdapter
     def next_value_for_sequence(sequence_name)
       %{#{sequence_name}.nextval}
     end
+
+    def new_keys(primary_key)
+      ''
+    end
   
     # +sql+ can be a single string or an array. If it is an array all 
     # elements that are in position >= 1 will be appended to the final SQL.
     def insert_many( sql, values, *args ) # :nodoc:
       # the number of inserts default
       number_of_inserts = 0
+      new_keys = []
     
       base_sql,post_sql = if sql.is_a?( String )
         [ sql, '' ]
@@ -65,17 +70,29 @@ module ActiveRecord::Import::AbstractAdapter
       if NO_MAX_PACKET == max or total_bytes < max
         number_of_inserts += 1
         sql2insert = base_sql + values.join( ',' ) + post_sql
-        insert( sql2insert, *args )
+
+        if self.class == ActiveRecord::ConnectionAdapters::PostgreSQLAdapter
+          pgresult = execute( sql2insert, *args )
+          new_keys = pgresult.column_values(0).map { |id| id.to_i } if pgresult.count > 0
+        else # perform normal query (don't have time to figure out other adapter capabilities)
+          insert( sql2insert, *args )
+        end
       else
         value_sets = self.class.get_insert_value_sets( values, sql_size, max )
         value_sets.each do |values|
           number_of_inserts += 1
           sql2insert = base_sql + values.join( ',' ) + post_sql
-          insert( sql2insert, *args )
+
+          if self.class == ActiveRecord::ConnectionAdapters::PostgreSQLAdapter
+            pgresult = execute( sql2insert, *args )
+            new_keys = pgresult.column_values(0).map { |id| id.to_i } if pgresult.count > 0
+          else
+            insert( sql2insert, *args )
+          end
         end
       end
 
-      number_of_inserts
+      return number_of_inserts, new_keys
     end
 
     def pre_sql_statements(options)
@@ -112,6 +129,9 @@ module ActiveRecord::Import::AbstractAdapter
 
       #with rollup
       post_sql_statements << rollup_sql if options[:rollup]
+
+      #return newly created ids for postgres adapter
+      post_sql_statements << options[:new_keys]
 
       post_sql_statements
     end

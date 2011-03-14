@@ -3,7 +3,7 @@ require "ostruct"
 module ActiveRecord::Import::ConnectionAdapters ; end
 
 module ActiveRecord::Import #:nodoc:
-  class Result < Struct.new(:failed_instances, :num_inserts)
+  class Result < Struct.new(:failed_instances, :num_inserts, :keys)
   end
 
   module ImportSupport #:nodoc:
@@ -191,6 +191,7 @@ class ActiveRecord::Base
       # Force the primary key col into the insert if it's not
       # on the list and we are using a sequence and stuff a nil
       # value for it into each row so the sequencer will fire later
+
       if !column_names.include?(primary_key) && sequence_name && connection.prefetch_primary_key?
          column_names << primary_key
          array_of_attributes.each { |a| a << nil }
@@ -204,8 +205,8 @@ class ActiveRecord::Base
       return_obj = if is_validating
         import_with_validations( column_names, array_of_attributes, options )
       else
-        num_inserts = import_without_validations_or_callbacks( column_names, array_of_attributes, options )
-        ActiveRecord::Import::Result.new([], num_inserts)
+        num_inserts, new_ids = import_without_validations_or_callbacks( column_names, array_of_attributes, options )
+        ActiveRecord::Import::Result.new([], num_inserts, new_ids)
       end
 
       if options[:synchronize]
@@ -260,6 +261,8 @@ class ActiveRecord::Base
       columns_sql = "(#{column_names.map{|name| connection.quote_column_name(name) }.join(',')})"
       insert_sql = "INSERT #{options[:ignore] ? 'IGNORE ':''}INTO #{quoted_table_name} #{columns_sql} VALUES "
       values_sql = values_sql_for_columns_and_attributes(columns, array_of_attributes)
+      options[:new_keys] = connection.new_keys(primary_key) # return all newly created pk values
+
       if not supports_import?
         number_inserted = 0
         values_sql.each do |values|
@@ -271,11 +274,11 @@ class ActiveRecord::Base
         post_sql_statements = connection.post_sql_statements( quoted_table_name, options )
         
         # perform the inserts
-        number_inserted = connection.insert_many( [ insert_sql, post_sql_statements ].flatten, 
-                                                  values_sql,
-                                                  "#{self.class.name} Create Many Without Validations Or Callbacks" )
+        number_inserted, keys = connection.insert_many( [ insert_sql, post_sql_statements ].flatten,
+                                                        values_sql,
+                                                        "#{self.class.name} Create Many Without Validations Or Callbacks" )
       end
-      number_inserted
+      return number_inserted, keys
     end
 
     private
